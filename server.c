@@ -5,11 +5,22 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-
 #define BUFFER_SIZE 1024
 
-void* handle_client() {
-	printf("handle client blah blah");
+typedef struct client_info {
+	int sockfd;
+} client_t;
+
+void* handle_client(void* args) {
+	client_t* client = (client_t*) args;	// function arguments
+	int pth = (int)pthread_self(); 			// thread ID
+	char buffer[BUFFER_SIZE];	   			// bytes received from client
+	int n = 0; 						   		// number of bytes received?
+	do {
+		printf("[thread %d] Blocked on recv()\n", pth);
+		//n = recv(client->sockfd, buffer, BUFFER_SIZE, 0);
+	} while(n > 0); // n will be 0 when the client closes its connection
+	free(client);
 	return NULL;
 }
 
@@ -40,20 +51,21 @@ int main() {
 	}
 
 	listen(sockfd, 5); // 5 is the maximum number of waiting clients
-	printf("MAIN: Listener bound to port %d\n", port);
+	printf("Listening on port %d\n", port);
 
 	struct sockaddr_in client_address;
 	int fromlen = sizeof(client_address);
 
 	while(1) {
-		printf("MAIN: blocked on accept()\n");
-		int newsockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
-		printf("MAIN: accepted child connection\n");
+		client_t* new_client = (client_t*)malloc(sizeof(client_t));
+		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
+		printf("Received incoming connection from %s\n", "<client-hostname");
 
 		/* handle socket in new thread */
 		pthread_t thread;
-		if(pthread_create(&thread, NULL, handle_client, NULL) != 0) {
+		if(pthread_create(&thread, NULL, handle_client, (void*)new_client) != 0) {
 			perror("pthread_create() failed!");
+			free(new_client);
 		}
 	}
 	return EXIT_SUCCESS;
