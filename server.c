@@ -1,4 +1,5 @@
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -6,6 +7,11 @@
 
 
 #define BUFFER_SIZE 1024
+
+void* handle_client() {
+	printf("handle client blah blah");
+	return NULL;
+}
 
 int main() {
 	/* Create listener as TCP (SOCK_STREAM) socket */
@@ -34,7 +40,21 @@ int main() {
 	}
 
 	listen(sockfd, 5); // 5 is the maximum number of waiting clients
-	printf("PARENT: Listener bound to port %d\n", port);
+	printf("MAIN: Listener bound to port %d\n", port);
 
+	struct sockaddr_in client_address;
+	int fromlen = sizeof(client_address);
+
+	while(1) {
+		printf("MAIN: blocked on accept()\n");
+		int newsockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
+		printf("MAIN: accepted child connection\n");
+
+		/* handle socket in new thread */
+		pthread_t thread;
+		if(pthread_create(&thread, NULL, handle_client, NULL) != 0) {
+			perror("pthread_create() failed!");
+		}
+	}
 	return EXIT_SUCCESS;
 }
