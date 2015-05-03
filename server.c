@@ -17,7 +17,7 @@ typedef struct client_info {
 void* handle_client(void* args) {
 	client_t* client = (client_t*) args; // function arguments
 	int pth = (int)pthread_self(); 		 // thread ID
-	int n = 0; 						   	 // number of bytes received
+	int n = 0; 						   	 // will hold umber of bytes received
 	
 	// receieve and handle data sent from this client
 	do {
@@ -26,10 +26,7 @@ void* handle_client(void* args) {
 		n = read(client->sockfd, buffer, BUFFER_SIZE);
 		if(n < 0) {
 			perror("read() failed!\n");
-			free(client);
-			return NULL;
-		}
-		else if(n == 0) {
+		} else if(n == 0) {
 			printf("[thread %d] Client closed its socket....terminating\n", pth);
 		} else {
 			printf("[thread %d] Rcvd: %s", pth, buffer);
@@ -38,12 +35,11 @@ void* handle_client(void* args) {
 			n = write(client->sockfd, "ACK", 3);
 			if(n != 3) {
 				perror("send() failed!\n");
-				free(client);
-				return NULL;
 			}
 		}
 	} while(n > 0); // n will be 0 when the client closes its connection
 	
+	close(client->sockfd);
 	free(client); // free memory allocated for this thread's arguments
 	return NULL;  // terminate thread
 }
@@ -92,5 +88,7 @@ int main() {
 			free(new_client);
 		}
 	}
+
+	close(sockfd);
 	return EXIT_SUCCESS;
 }
