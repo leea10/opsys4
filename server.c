@@ -4,24 +4,48 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #define BUFFER_SIZE 1024
 
+// arguments for handle_client() thread function
 typedef struct client_info {
 	int sockfd;
 } client_t;
 
+// new thread for new client
 void* handle_client(void* args) {
-	client_t* client = (client_t*) args;	// function arguments
-	int pth = (int)pthread_self(); 			// thread ID
-	char buffer[BUFFER_SIZE];	   			// bytes received from client
-	int n = 0; 						   		// number of bytes received?
+	client_t* client = (client_t*) args; // function arguments
+	int pth = (int)pthread_self(); 		 // thread ID
+	int n = 0; 						   	 // number of bytes received
+	
+	// receieve and handle data sent from this client
 	do {
-		printf("[thread %d] Blocked on recv()\n", pth);
-		//n = recv(client->sockfd, buffer, BUFFER_SIZE, 0);
+		char buffer[BUFFER_SIZE]; // data received from client
+		//n = recv(client->sockfd, buffer, BUFFER_SIZE, MSG_PEEK);
+		n = read(client->sockfd, buffer, BUFFER_SIZE);
+		if(n < 0) {
+			perror("read() failed!\n");
+			free(client);
+			return NULL;
+		}
+		else if(n == 0) {
+			printf("[thread %d] Client closed its socket....terminating\n", pth);
+		} else {
+			printf("[thread %d] Rcvd: %s", pth, buffer);
+			
+			// TEST - send back acknowledgement to the client 
+			n = write(client->sockfd, "ACK", 3);
+			if(n != 3) {
+				perror("send() failed!\n");
+				free(client);
+				return NULL;
+			}
+		}
 	} while(n > 0); // n will be 0 when the client closes its connection
-	free(client);
-	return NULL;
+	
+	free(client); // free memory allocated for this thread's arguments
+	return NULL;  // terminate thread
 }
 
 int main() {
@@ -29,7 +53,7 @@ int main() {
 	int sockfd = socket(PF_INET, SOCK_STREAM, 0);
 
 	if(sockfd < 0) {
-		perror("socket() failed!");
+		perror("socket() failed!\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -46,7 +70,7 @@ int main() {
 	int addr_length = sizeof(server_address);
 
 	if(bind(sockfd, (struct sockaddr *)&server_address, addr_length) < 0) {
-		perror("bind() failed!");
+		perror("bind() failed!\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -57,14 +81,14 @@ int main() {
 	int fromlen = sizeof(client_address);
 
 	while(1) {
-		client_t* new_client = (client_t*)malloc(sizeof(client_t));
+		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
 		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
 		printf("Received incoming connection from %s\n", "<client-hostname");
 
 		/* handle socket in new thread */
 		pthread_t thread;
 		if(pthread_create(&thread, NULL, handle_client, (void*)new_client) != 0) {
-			perror("pthread_create() failed!");
+			perror("pthread_create() failed!\n");
 			free(new_client);
 		}
 	}
