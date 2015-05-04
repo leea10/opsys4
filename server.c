@@ -1,12 +1,20 @@
+#include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define BUFFER_SIZE 1024
+#define N_FRAMES 32
+#define FRAME_SIZE 1024
+#define FRAMES_PER_FILE 4
+
+// GLOBAL VARIABLES... BEWARE.
+char server_memory[N_FRAMES * FRAME_SIZE];
 
 // arguments for handle_client() thread function
 typedef struct client_info {
@@ -22,7 +30,6 @@ void* handle_client(void* args) {
 	// receieve and handle data sent from this client
 	do {
 		char buffer[BUFFER_SIZE]; // data received from client
-		//n = recv(client->sockfd, buffer, BUFFER_SIZE, MSG_PEEK);
 		n = read(client->sockfd, buffer, BUFFER_SIZE);
 		if(n < 0) {
 			perror("read() failed!\n");
@@ -76,6 +83,12 @@ int main() {
 
 	struct sockaddr_in client_address;
 	int fromlen = sizeof(client_address);
+
+	// make the hidden storage directory, if it doesn't already exist
+	if(mkdir(".storage", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) < 0 && errno != EEXIST) {
+		perror("mkdir() failed!\n");
+		exit(EXIT_FAILURE);
+	}
 
 	while(1) {
 		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
