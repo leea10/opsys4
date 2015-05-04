@@ -29,10 +29,11 @@ void* handle_client(void* args) {
 		} else if(n == 0) {
 			printf("[thread %u] Client closed its socket....terminating\n", pth);
 		} else {
-			printf("[thread %u] Rcvd: %s", pth, buffer);
+			printf("[thread %u] Rcvd: %s\n", pth, buffer);
 			
 			// TEST - send back acknowledgement to the client 
 			n = write(client->sockfd, "ACK", 3);
+			fflush(NULL);
 			if(n != 3) {
 				perror("send() failed!\n");
 			}

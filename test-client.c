@@ -6,6 +6,8 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#define BUFFER_SIZE 1024
+
 int main() {
 	/* create TCP client socket */
 	int sockfd = socket(PF_INET, SOCK_STREAM, 0);
@@ -31,5 +33,31 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
+	char command[BUFFER_SIZE];
+	while(1) {
+    	printf("Enter a command: ");
+    	strcpy(command, " ");
+    	scanf("%[^\n]", command);
+    	getchar();
+
+    	int n = write(sockfd, command, strlen(command));
+    	fflush(NULL);
+    	if(n < 0) {
+    		perror("write() failed!\n");
+   			exit(EXIT_FAILURE);
+    	}
+
+    	char buffer[BUFFER_SIZE];
+    	n = read(sockfd, buffer, BUFFER_SIZE); // blocking
+    	if(n < 0) {
+    		perror("read() failed!\n");
+    		exit(EXIT_FAILURE);
+    	} else {
+    		buffer[n] = '\0';
+    		printf("Received message from server: %s\n", buffer);
+    	}
+	}
+
+	close(sockfd); 
 	return EXIT_SUCCESS;
 }
