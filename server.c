@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -25,27 +26,87 @@ typedef struct client_info {
 void* handle_client(void* args) {
 	client_t* client = (client_t*) args; // function arguments
 	int pth = (int)pthread_self(); 		 // thread ID
-	int n = 0; 						   	 // will hold umber of bytes received
+	int bytes_transferred = 0; 						   	 // will hold umber of bytes received
 	
 	// receieve and handle data sent from this client
 	do {
-		char buffer[BUFFER_SIZE]; // data received from client
-		n = read(client->sockfd, buffer, BUFFER_SIZE);
-		if(n < 0) {
+		char command[BUFFER_SIZE]; // data received from client
+		bytes_transferred = read(client->sockfd, command, BUFFER_SIZE);
+		command[bytes_transferred] = '\0';
+
+		if(bytes_transferred < 0) { // something went wrong, loop will terminate
 			perror("read() failed!\n");
-		} else if(n == 0) {
+		} else if(bytes_transferred == 0) { // client closed socket, loop will terminate
 			printf("[thread %u] Client closed its socket....terminating\n", pth);
-		} else {
-			printf("[thread %u] Rcvd: %s\n", pth, buffer);
-			
-			// TEST - send back acknowledgement to the client 
-			n = write(client->sockfd, "ACK", 3);
-			fflush(NULL);
-			if(n != 3) {
-				perror("send() failed!\n");
+		} else { // successful read
+			printf("[thread %u] Rcvd: %s", pth, command);
+			int cmd_len = bytes_transferred; // for the sake of making the code more readable
+
+			// checking for valid command
+			unsigned short is_valid_cmd = 0;
+			if(cmd_len > 7 && command[6] == ' ') {
+				char* command_args = command + 7;
+				command[6] = '\0';
+				if(strcmp(command, "DELETE") == 0) {
+					is_valid_cmd = 1;
+				}
+			} else if(cmd_len > 6 && command[5] == ' ') {
+				char* command_args = command + 6;
+				command[5] = '\0';
+				if(strcmp(command, "STORE") == 0) {
+					is_valid_cmd = 1;
+				}
+			} else if(cmd_len > 5 && command[4] == ' ') {
+				char* command_args = command + 5;
+				command[4] = '\0';
+				if(strcmp(command, "READ") == 0) {
+					is_valid_cmd = 1;
+				}
+			} else if(cmd_len == 4 && strcmp(command, "DIR\n") == 0) {
+				is_valid_cmd = 1;
+			} 
+
+			// send proper message back to client
+			char* msg = NULL;
+			msg = is_valid_cmd ? "ACK\n" : "ERROR: invalid command\n";
+			int msg_len = strlen(msg);
+			bytes_transferred = write(client->sockfd, msg, msg_len);
+			if(bytes_transferred < msg_len) { // sending failed, loop will terminate
+				perror("write() failed!\n");
 			}
+
+			// if strlen >= 4 and first four characters are DIR\n
+
+			// else if strlen >= 6 and strcmp first 6 characters to 'STORE '
+				// start from the character after the space
+				// iterate until...
+					// reach another space
+						// store the string in between as the filename
+						// check if the filname exists already
+							// if something goes wrong, send error, close this connection
+							// if file does exist, send back an error
+							// if not, store the file name in a variable
+					// reach EOS or \n
+						// return invalid command error to client
+				// iterate until...
+					// if reach a non-numeric character
+						// return invalid command error to client
+					// else if reach '\n'
+						// convert string into integer and store as num_bytes
+				// AT THIS POINT, THE COMMAND IS VALID
+				// if the rest of the string's length is less than the stored num bytes,
+					// return error: not enough bytes in content
+				// create a new file in .storage with the stored file name
+				// open file
+				// lock file
+				// copy the specified number of bytes into the file
+				// close the file
+				// unlock file
+				// send ACK
+
+			// else if strlen >= 
 		}
-	} while(n > 0); // n will be 0 when the client closes its connection
+	} while(bytes_transferred > 0); // n will be 0 when the client closes its connection
 	
 	close(client->sockfd);
 	free(client); // free memory allocated for this thread's arguments

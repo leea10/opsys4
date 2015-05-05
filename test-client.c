@@ -37,11 +37,13 @@ int main() {
 	while(1) {
     	printf("Enter a command: ");
     	strcpy(command, " ");
-    	scanf("%[^\n]", command);
+    	scanf("%[^*]", command);
+    	getchar();
     	getchar();
 
-    	int n = write(sockfd, command, strlen(command));
     	fflush(NULL);
+    	int n = write(sockfd, command, strlen(command));
+    	printf("you sent: %s\n", command);
     	if(n < 0) {
     		perror("write() failed!\n");
    			exit(EXIT_FAILURE);
@@ -54,7 +56,7 @@ int main() {
     		exit(EXIT_FAILURE);
     	} else {
     		buffer[n] = '\0';
-    		printf("Received message from server: %s\n", buffer);
+    		printf("Received message from server: %s", buffer);
     	}
 	}
 
