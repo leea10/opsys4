@@ -45,10 +45,18 @@ void* handle_client(void* args) {
 			// checking for valid command
 			unsigned short is_valid_cmd = 0;
 			if(cmd_len > 7 && command[6] == ' ') {
-				char* command_args = command + 7;
+				char* filename = command + 7;
 				command[6] = '\0';
 				if(strcmp(command, "DELETE") == 0) {
-					is_valid_cmd = 1;
+					// find the end of the filename argument
+					char* p = filename;
+					while(!(*p == '\n' || *p == '\0')) {
+						p++;
+					}
+					if(*p == '\n') {  // reached end of filename, according to protocol
+						*p = '\0';	  // filename is now stored correctly
+						is_valid_cmd = 1; // officially a valid command!
+					}			
 				}
 			} else if(cmd_len > 6 && command[5] == ' ') {
 				char* command_args = command + 6;
@@ -62,8 +70,12 @@ void* handle_client(void* args) {
 				if(strcmp(command, "READ") == 0) {
 					is_valid_cmd = 1;
 				}
-			} else if(cmd_len == 4 && strcmp(command, "DIR\n") == 0) {
-				is_valid_cmd = 1;
+			} else if(cmd_len >= 4 && command[3] == '\n') {
+				command[3] = '\0';
+				if(strcmp(command, "DIR") == 0) {
+					is_valid_cmd = 1;
+					// LIST THE DIR STUFF
+				}
 			} 
 
 			// send proper message back to client
@@ -74,8 +86,6 @@ void* handle_client(void* args) {
 			if(bytes_transferred < msg_len) { // sending failed, loop will terminate
 				perror("write() failed!\n");
 			}
-
-			// if strlen >= 4 and first four characters are DIR\n
 
 			// else if strlen >= 6 and strcmp first 6 characters to 'STORE '
 				// start from the character after the space
@@ -103,8 +113,6 @@ void* handle_client(void* args) {
 				// close the file
 				// unlock file
 				// send ACK
-
-			// else if strlen >= 
 		}
 	} while(bytes_transferred > 0); // n will be 0 when the client closes its connection
 	
