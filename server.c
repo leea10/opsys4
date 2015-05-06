@@ -49,7 +49,7 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 // parameter: socket descriptor to write errors and results to
 // parameter: name of file to read from
 // return: number of bytes read
-int read_file(int sockfd, char* filename) {
+int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	if(filename) {
 		int msg_len = strlen(filename) + 14;
 		char msg[msg_len+1]; // plus one is for the null terminator
@@ -92,7 +92,7 @@ void* handle_client(void* args) {
 	int pth = (int)pthread_self(); 		 // thread ID
 	FILE* client_sock = fdopen(client->sockfd, "r");
 
-	// receieve and handle data sent from this client
+	// receieve and parse data sent from this client
 	char full_cmd[BUFFER_SIZE]; // data receieved from client
 	while(fgets(full_cmd, BUFFER_SIZE, client_sock)) {
 		int n = strlen(full_cmd)-1;
@@ -122,8 +122,17 @@ void* handle_client(void* args) {
 			store_file(client->sockfd, filename, n_bytes, content);
 			free(content);
 		} else if(strcmp(cmd, "READ") == 0) {
-			char* filename = strtok(NULL, " ");
-			read_file(client->sockfd, filename);
+			char* filename = strtok(NULL, " "); // name of the file to read from
+			char* arg2 = strtok(NULL, " ");     // byte offset to start reading at
+			char* arg3 = strtok(NULL, " ");     // number of bytes to read
+			int byte_offset = -1;
+			int length = -1;
+			if(arg2 && arg3) {
+				char* endptr;
+				byte_offset = strtol(arg2, &endptr, 10);
+				length = strtol(arg3, &endptr, 10);
+			}
+			read_file(client->sockfd, filename, byte_offset, length);
 		} else if(strcmp(cmd, "DELETE") == 0) {
 			char* filename = strtok(NULL, " ");
 			delete_file(client->sockfd, filename);
