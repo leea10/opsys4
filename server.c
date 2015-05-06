@@ -50,11 +50,11 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 // parameter: name of file to read from
 // return: number of bytes read
 int read_file(int sockfd, char* filename, int byte_offset, int length) {
-	if(filename) {
-		int msg_len = strlen(filename) + 14;
-		char msg[msg_len+1]; // plus one is for the null terminator
-		sprintf(msg, "READ file: '%s'\n", filename);
-		write(sockfd, msg, msg_len);
+	if(filename && byte_offset >= 0 && length > 0) {
+		char msg[BUFFER_SIZE]; // plus one is for the null terminator
+		sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
+			filename, byte_offset, length);
+		write(sockfd, msg, strlen(msg));
 		return 1;
 	} else {
 		char* msg = "ERROR: missing arguments for READ command\n";
