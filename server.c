@@ -27,19 +27,55 @@ int list_dir(int sockfd) {
 
 // function to handle STORE command
 // parameter: socket descriptor to write errors and results to
-// parameter: file name of file to store
-// return: number of bytes stored, -1 if failed
+// parameter: name of file to store
+// return: number of bytes stored
 int store_file(int sockfd, char* filename) {
 	if(filename) {	
-		int msg_len = strlen(filename) + 16;
-		char msg[msg_len];
+		int msg_len = strlen(filename) + 15;
+		char msg[msg_len+1]; // plus one is for the null terminator
 		sprintf(msg, "STORE file: '%s'\n", filename);
 		write(sockfd, msg, msg_len);
-		return 0;
+		return 1;
 	} else {
 		char* msg = "ERROR: missing arguments for STORE command\n";
 		write(sockfd, msg, strlen(msg));
-		return -1;
+		return 0;
+	}
+}
+
+// function to handle READ command
+// parameter: socket descriptor to write errors and results to
+// parameter: name of file to read from
+// return: number of bytes read
+int read_file(int sockfd, char* filename) {
+	if(filename) {
+		int msg_len = strlen(filename) + 14;
+		char msg[msg_len+1]; // plus one is for the null terminator
+		sprintf(msg, "READ file: '%s'\n", filename);
+		write(sockfd, msg, msg_len);
+		return 1;
+	} else {
+		char* msg = "ERROR: missing arguments for READ command\n";
+		write(sockfd, msg, strlen(msg));
+		return 0;
+	}
+}
+
+// function to handle DELETE command
+// parameter: socket descriptor to write errors and results to
+// parameter: name of file to delete
+// return: number of files deleted (i.e. 1 or 0)
+int delete_file(int sockfd, char* filename) {
+	if(filename) {
+		int msg_len = strlen(filename) + 16;
+		char msg[msg_len+1]; // plus one is for the null terminator
+		sprintf(msg, "DELETE file: '%s'\n", filename);
+		write(sockfd, msg, msg_len);
+		return 1;
+	} else {
+		char* msg = "ERROR: missing arguments for DELETE command\n";
+		write(sockfd, msg, strlen(msg));
+		return 0;
 	}
 }
 
@@ -74,11 +110,11 @@ void* handle_client(void* args) {
 			char* filename = strtok(NULL, " ");
 			store_file(client->sockfd, filename);
 		} else if(strcmp(cmd, "READ") == 0) {
-			char* msg = "READ COMMAND FOUND\n";
-			write(client->sockfd, msg, strlen(msg));
+			char* filename = strtok(NULL, " ");
+			read_file(client->sockfd, filename);
 		} else if(strcmp(cmd, "DELETE") == 0) {
-			char* msg = "DELETE COMMAND FOUND\n";
-			write(client->sockfd, msg, strlen(msg));
+			char* filename = strtok(NULL, " ");
+			delete_file(client->sockfd, filename);
 		} else {
 			char unknown_cmd_err[strlen(cmd)+27];
 			sprintf(unknown_cmd_err, "ERROR: Unknown command '%s'\n", cmd);
