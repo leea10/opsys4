@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -28,16 +29,17 @@ int list_dir(int sockfd) {
 // function to handle STORE command
 // parameter: socket descriptor to write errors and results to
 // parameter: name of file to store
+// parameter: number of bytes being stored
+// parameter: content to store
 // return: number of bytes stored
-int store_file(int sockfd, char* filename) {
-	if(filename) {	
-		int msg_len = strlen(filename) + 15;
-		char msg[msg_len+1]; // plus one is for the null terminator
-		sprintf(msg, "STORE file: '%s'\n", filename);
-		write(sockfd, msg, msg_len);
+int store_file(int sockfd, char* filename, int n_bytes, char* content) {
+	if(filename && n_bytes > 0 && content) {	
+		char msg[BUFFER_SIZE]; // plus one is for the null terminator
+		sprintf(msg, "STORE file: '%s' (%d bytes)\n%s\n", filename, n_bytes, content);
+		write(sockfd, msg, strlen(msg));
 		return 1;
 	} else {
-		char* msg = "ERROR: missing arguments for STORE command\n";
+		char* msg = "ERROR: invalid arguments for STORE command\n";
 		write(sockfd, msg, strlen(msg));
 		return 0;
 	}
@@ -107,8 +109,18 @@ void* handle_client(void* args) {
 		} else if(strcmp(cmd, "DIR") == 0) {
 			list_dir(client->sockfd);
 		} else if(strcmp(cmd, "STORE") == 0) {
-			char* filename = strtok(NULL, " ");
-			store_file(client->sockfd, filename);
+			char* filename = strtok(NULL, " "); // name of file to store
+			char* arg2 = strtok(NULL, " ");     // number of bytes to store
+			int n_bytes = -1;
+			char* content = NULL;
+			if(arg2) {                          // convert to integer
+				char* endptr;
+				n_bytes = strtol(arg2, &endptr, 10);
+				content = (char*)malloc(n_bytes*sizeof(char));
+				fgets(content, n_bytes, client_sock);
+			}
+			store_file(client->sockfd, filename, n_bytes, content);
+			free(content);
 		} else if(strcmp(cmd, "READ") == 0) {
 			char* filename = strtok(NULL, " ");
 			read_file(client->sockfd, filename);
