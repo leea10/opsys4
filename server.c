@@ -17,6 +17,32 @@
 // GLOBAL VARIABLES... BEWARE.
 char server_memory[N_FRAMES * FRAME_SIZE];
 
+// function to handle DIR command
+// parameter: socket descriptor to write errors and results to
+// return: number of files in the storage directory, -1 if failed
+int list_dir(int sockfd) {
+	write(sockfd, "DIR COMMAND FOUND\n", 18);
+	return 0;
+}
+
+// function to handle STORE command
+// parameter: socket descriptor to write errors and results to
+// parameter: file name of file to store
+// return: number of bytes stored, -1 if failed
+int store_file(int sockfd, char* filename) {
+	if(filename) {	
+		int msg_len = strlen(filename) + 16;
+		char msg[msg_len];
+		sprintf(msg, "STORE file: '%s'\n", filename);
+		write(sockfd, msg, msg_len);
+		return 0;
+	} else {
+		char* msg = "ERROR: missing arguments for STORE command\n";
+		write(sockfd, msg, strlen(msg));
+		return -1;
+	}
+}
+
 // arguments for handle_client() thread function
 typedef struct client_info {
 	int sockfd;
@@ -31,20 +57,30 @@ void* handle_client(void* args) {
 	// receieve and handle data sent from this client
 	char full_cmd[BUFFER_SIZE]; // data receieved from client
 	while(fgets(full_cmd, BUFFER_SIZE, client_sock)) {
-		full_cmd[strlen(full_cmd)-1] = '\0'; // get rid of newline character
+		int n = strlen(full_cmd)-1;
+		if(full_cmd[n] == '\n') {
+			full_cmd[n] = '\0'; // get rid of newline character			
+		}	
 		printf("[thread %u] Rcvd: %s\n", pth, full_cmd);
 
+		// check for valid command
 		char* cmd = strtok(full_cmd, " ");
-		if(strcmp(cmd, "DIR") == 0) {
-			write(client->sockfd, "DIR COMMAND FOUND\n", 18);
+		if(!cmd) {
+			char* msg = "ERROR: Empty command\n";
+			write(client->sockfd, msg, strlen(msg));
+		} else if(strcmp(cmd, "DIR") == 0) {
+			list_dir(client->sockfd);
 		} else if(strcmp(cmd, "STORE") == 0) {
-			write(client->sockfd, "STORE COMMAND FOUND\n", 20);
+			char* filename = strtok(NULL, " ");
+			store_file(client->sockfd, filename);
 		} else if(strcmp(cmd, "READ") == 0) {
-			write(client->sockfd, "READ COMMAND FOUND\n", 19);
+			char* msg = "READ COMMAND FOUND\n";
+			write(client->sockfd, msg, strlen(msg));
 		} else if(strcmp(cmd, "DELETE") == 0) {
-			write(client->sockfd, "DELETE COMMAND FOUND\n", 21);
+			char* msg = "DELETE COMMAND FOUND\n";
+			write(client->sockfd, msg, strlen(msg));
 		} else {
-			char unknown_cmd_err[strlen(cmd)+26];
+			char unknown_cmd_err[strlen(cmd)+27];
 			sprintf(unknown_cmd_err, "ERROR: Unknown command '%s'\n", cmd);
 			write(client->sockfd, unknown_cmd_err, strlen(unknown_cmd_err));
 		}

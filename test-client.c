@@ -1,10 +1,12 @@
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define BUFFER_SIZE 1024
 
@@ -33,6 +35,7 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
+	FILE * socket_stream = fdopen(sockfd, "r");
 	char command[BUFFER_SIZE];
 	while(1) {
     	printf("Enter a command: ");
@@ -43,20 +46,25 @@ int main() {
 
     	fflush(NULL);
     	int n = write(sockfd, command, strlen(command));
-    	printf("you sent: %s\n", command);
+    	printf("you sent: %s", command);
     	if(n < 0) {
     		perror("write() failed!\n");
    			exit(EXIT_FAILURE);
     	}
 
+    	// count how many commands were in that sent packet
+    	int num_commands = 0;
+    	char* cmd = strtok(command, "\n");
+    	while(cmd) {
+    		num_commands++;
+    		cmd = strtok(NULL, "\n");
+    	}
+
+    	int msgs_rcvd = 0;
     	char buffer[BUFFER_SIZE];
-    	n = read(sockfd, buffer, BUFFER_SIZE); // blocking
-    	if(n < 0) {
-    		perror("read() failed!\n");
-    		exit(EXIT_FAILURE);
-    	} else {
-    		buffer[n] = '\0';
-    		printf("Received message from server: %s", buffer);
+    	while(msgs_rcvd < num_commands && fgets(buffer, BUFFER_SIZE, socket_stream)) {
+    		printf("%s", buffer);
+    		msgs_rcvd++;
     	}
 	}
 
