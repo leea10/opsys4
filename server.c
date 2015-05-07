@@ -24,33 +24,49 @@ char server_memory[N_FRAMES * FRAME_SIZE];
 // parameter: socket descriptor to write errors and results to
 // return: number of files in the storage directory, -1 if failed
 int list_dir(int sockfd) {
-	int num_files = 0; // count of the number of files in the directory
-	char* file_list = (char*)malloc(BUFFER_SIZE*sizeof(char)); // file list
-	
+	int num_files = 0;                // count of the number of files in the directory
+	int file_list_size = BUFFER_SIZE; // initial size of the file list in bytes
+	char* file_list = (char*)malloc(file_list_size*sizeof(char)); // file list
+	int i = 0; // position that we are writing to in the file list	
+
+	// read directory
 	DIR* directory = opendir(".storage");
 	struct dirent* file;
-	int i = 0;
 	while((file = readdir(directory)) != NULL) {
+		// do not count the . and .. directories
 		if(strcmp(file->d_name, ".") == 0 || strcmp(file->d_name, "..") == 0) {
 			continue;
 		}
 		num_files++;
-		if(i + strlen(file->d_name) < sizeof(file_list)) {
-			sprintf(file_list+i, "%s\n", file->d_name);
-			i += strlen(file->d_name) + 1;
-		} else {
-			file_list = realloc(file_list, sizeof(file_list)*2);
-			sprintf(file_list+i, "%s\n", file->d_name);
-			i += strlen(file->d_name) + 1;			
-		}
+		
+		int filename_len = strlen(file->d_name);
+		if(i + filename_len + 1 >= file_list_size) {
+			// need to increase size of buffer
+			file_list_size *= 2;
+			char* tmp = realloc(file_list, file_list_size);
+			if(tmp) {
+				file_list = tmp;
+			} else {
+				perror("out of memory!\n");
+				return -1;
+			}
+		} 
+
+		// write this name of this file to the buffer
+		sprintf(file_list+i, "%s\n", file->d_name); 
+		i += filename_len + 1; // move our current position forward
 	}
 	
 	// test prints
-	printf("%lu\n", sizeof(*file_list));
-	printf("%d\n%s", num_files, file_list);
+	//printf("%d\n%s", num_files, file_list);
+	//printf("%d\n", (int)strlen(file_list) + 8);
+	
+	// send result to client
 	char msg[strlen(file_list)+8];
 	sprintf(msg, "%d\n%s", num_files, file_list);
 	write(sockfd, msg, strlen(msg));
+	
+	// free memory
 	closedir(directory);
 	free(file_list);
 	return num_files;
