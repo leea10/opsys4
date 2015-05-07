@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define BUFFER_SIZE 1024
@@ -17,8 +18,16 @@
 #define FRAME_SIZE 1024
 #define FRAMES_PER_FILE 4
 
+// struct for page table entries
+typedef struct page_table_entry {
+	char* filename;
+	int page_number;
+	time_t last_used;
+} pte_t;
+
 // GLOBAL VARIABLES... BEWARE.
 char server_memory[N_FRAMES * FRAME_SIZE];
+pte_t page_table[N_FRAMES];
 
 // function to handle DIR command
 // parameter: socket descriptor to write errors and results to
@@ -56,10 +65,6 @@ int list_dir(int sockfd) {
 		sprintf(file_list+i, "%s\n", file->d_name); 
 		i += filename_len + 1; // move our current position forward
 	}
-	
-	// test prints
-	//printf("%d\n%s", num_files, file_list);
-	//printf("%d\n", (int)strlen(file_list) + 8);
 	
 	// send result to client
 	char msg[strlen(file_list)+8];
@@ -110,6 +115,7 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 		// send acknowledgement
 		write(sockfd, "ACK\n", 4);
 		printf("[thread %u] Sent: ACK\n", pth);
+		close(fd_write);
 		return 1;
 	} else {
 		char* msg = "ERROR: invalid arguments for STORE command\n";
@@ -141,17 +147,40 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 // parameter: name of file to delete
 // return: number of files deleted (i.e. 1 or 0)
 int delete_file(int sockfd, char* filename) {
-	if(filename) {
-		int msg_len = strlen(filename) + 16;
-		char msg[msg_len+1]; // plus one is for the null terminator
-		sprintf(msg, "DELETE file: '%s'\n", filename);
-		write(sockfd, msg, msg_len);
-		return 1;
-	} else {
+	// make sure filename was passed in
+	if(!filename) {
 		char* msg = "ERROR: missing arguments for DELETE command\n";
 		write(sockfd, msg, strlen(msg));
-		return 0;
+		return 0;		
 	}
+
+	int pth = (int)pthread_self(); // thread ID
+
+	// relative path of target file to delete
+	char target[strlen(".storage/") + strlen(filename)];
+	sprintf(target, ".storage/%s", filename);
+
+	int rc = remove(target); // attempt to remove
+	
+	// check if file exists
+	if(errno == ENOENT) {
+		char* msg = "ERROR: NO SUCH FILE\n";
+		int msg_len = strlen(msg);
+		if(write(sockfd, msg, msg_len) == msg_len) {
+			printf("[thread %u] Sent: %s\n", pth, msg);
+		}
+		return 0;
+	} 
+
+	// send acknowledgement if the delete was successful
+	if(rc == 0) {
+		printf("[thread %u] Deleted %s file\n", pth, filename);
+		if(write(sockfd, "ACK\n", 4) == 4) {
+			printf("[thread %u] Sent: ACK\n", pth);
+		}
+		return 1;
+	}
+	return 0; // something else went wrong
 }
 
 // arguments for handle_client() thread function
@@ -198,6 +227,7 @@ void* handle_client(void* args) {
 			char* filename = strtok(NULL, " "); // name of the file to read from
 			char* arg2 = strtok(NULL, " ");     // byte offset to start reading at
 			char* arg3 = strtok(NULL, " ");     // number of bytes to read
+			
 			int byte_offset = -1;
 			int length = -1;
 			if(arg2 && arg3) {
