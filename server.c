@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -22,7 +23,36 @@ char server_memory[N_FRAMES * FRAME_SIZE];
 // parameter: socket descriptor to write errors and results to
 // return: number of files in the storage directory, -1 if failed
 int list_dir(int sockfd) {
-	write(sockfd, "DIR COMMAND FOUND\n", 18);
+	int num_files = 0; // count of the number of files in the directory
+	char* file_list = (char*)malloc(BUFFER_SIZE*sizeof(char)); // file list
+	
+	DIR* directory = opendir(".storage");
+	struct dirent* file;
+	int i = 0;
+	while((file = readdir(directory)) != NULL) {
+		if(strcmp(file->d_name, ".") == 0 || strcmp(file->d_name, "..") == 0) {
+			continue;
+		}
+		num_files++;
+		if(i + strlen(file->d_name) < sizeof(file_list)) {
+			sprintf(file_list+i, "%s\n", file->d_name);
+			i += strlen(file->d_name) + 1;
+		} else {
+			file_list = realloc(file_list, sizeof(file_list)*2);
+			sprintf(file_list+i, "%s\n", file->d_name);
+			i += strlen(file->d_name) + 1;			
+		}
+	}
+	
+	// test prints
+	printf("%d\n", i);
+	printf("%d\n%s", num_files, file_list);
+
+	char msg[sizeof(file_list)];
+	sprintf(msg, "%d\n%s", num_files, file_list);
+	write(sockfd, msg, strlen(msg));
+	closedir(directory);
+	free(file_list);
 	return 0;
 }
 
