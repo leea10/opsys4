@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -45,15 +46,14 @@ int list_dir(int sockfd) {
 	}
 	
 	// test prints
-	printf("%d\n", i);
+	printf("%lu\n", sizeof(*file_list));
 	printf("%d\n%s", num_files, file_list);
-
-	char msg[sizeof(file_list)];
+	char msg[strlen(file_list)+8];
 	sprintf(msg, "%d\n%s", num_files, file_list);
 	write(sockfd, msg, strlen(msg));
 	closedir(directory);
 	free(file_list);
-	return 0;
+	return num_files;
 }
 
 // function to handle STORE command
@@ -63,10 +63,37 @@ int list_dir(int sockfd) {
 // parameter: content to store
 // return: number of bytes stored
 int store_file(int sockfd, char* filename, int n_bytes, char* content) {
-	if(filename && n_bytes > 0 && content) {	
-		char msg[BUFFER_SIZE]; // plus one is for the null terminator
-		sprintf(msg, "STORE file: '%s' (%d bytes)\n%s\n", filename, n_bytes, content);
-		write(sockfd, msg, strlen(msg));
+	int pth = (int)pthread_self(); 		 // thread ID
+	if(filename && n_bytes > 0 && content) {
+		// form the new file's relative path
+		char new_filepath[strlen(".storage/")+strlen(filename)+1];
+		sprintf(new_filepath, ".storage/%s", filename);
+		
+		// check if the file already
+		struct stat buf;
+		int rc = stat(new_filepath, &buf);	
+		if(rc >= 0) {
+			char* msg = "ERROR: FILE EXISTS\n";
+			write(sockfd, msg, strlen(msg));
+			return 0;
+		}
+
+		// create file and open for writing
+		int fd_write = open(new_filepath, 
+			O_WRONLY | O_TRUNC | O_CREAT, 
+			S_IWUSR | S_IWGRP | S_IWOTH | S_IRUSR | S_IRGRP | S_IROTH);
+		if(fd_write < 0) {
+			printf("open() failed for write file %s!", new_filepath);
+			return 0;
+		}
+
+		// write contents to file
+		int bytes_written = write(fd_write, content, n_bytes);
+		printf("[thread %u] Transferred file (%d bytes)\n", pth, bytes_written);
+
+		// send acknowledgement
+		write(sockfd, "ACK\n", 4);
+		printf("[thread %u] Sent: ACK\n", pth);
 		return 1;
 	} else {
 		char* msg = "ERROR: invalid arguments for STORE command\n";

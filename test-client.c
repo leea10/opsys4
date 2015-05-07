@@ -64,6 +64,9 @@ int main() {
     	char buffer[BUFFER_SIZE];
     	while(msgs_rcvd < num_commands && fgets(buffer, BUFFER_SIZE, socket_stream)) {
     		printf("%s", buffer);
+    		char* endptr;
+    		int more_reads = strtol(buffer, &endptr, 10);
+    		num_commands += more_reads;
     		msgs_rcvd++;
     	}
 	}
