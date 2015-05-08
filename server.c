@@ -23,10 +23,11 @@ typedef struct page_table_entry {
 	char* filename;
 	int page_number;
 	time_t last_used;
+	pthread_rwlock_t page_lock;
 } pte_t;
 
 // GLOBAL VARIABLES... BEWARE.
-char server_memory[N_FRAMES * FRAME_SIZE];
+char* server_memory[N_FRAMES];
 pte_t* page_table[N_FRAMES];
 pthread_rwlock_t pte_locks[N_FRAMES];
 
@@ -140,7 +141,7 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 	write(sockfd, "ACK\n", 4);
 	printf("[thread %u] Sent: ACK\n", pth);
 	close(fd_write);
-	return 1;
+	return bytes_written;
 }
 
 // function to handle READ command
@@ -155,7 +156,32 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		char* msg = "ERROR: missing arguments for READ command\n";
 		int msg_len = strlen(msg);
 		if(write(sockfd, msg, msg_len) == msg_len) {
-			printf("[thread %u] Sent: %s\n", pth, msg);
+			printf("[thread %u] Sent: %s", pth, msg);
+		}
+		return 0;
+	}
+
+	// relative path of target file to delete
+	char target[strlen(".storage/") + strlen(filename)];
+	sprintf(target, ".storage/%s", filename);
+
+	// check if file exists
+	struct stat buf;
+	if(stat(target, &buf) < 0) {
+		char* msg = "ERROR: NO SUCH FILE\n";
+		int msg_len = strlen(msg);
+		if(write(sockfd, msg, msg_len) == msg_len) {
+			printf("[thread %u] Sent: %s", pth, msg);
+		}
+		return 0;
+	}
+
+	// make sure bytes are in range
+	if(byte_offset + length > buf.st_size) {
+		char* msg = "ERROR: INVALID BYTE RANGE\n";
+		int msg_len = strlen(msg);
+		if(write(sockfd, msg, msg_len) == msg_len) {
+			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;
 	}
@@ -179,7 +205,7 @@ int delete_file(int sockfd, char* filename) {
 		char* msg = "ERROR: missing arguments for DELETE command\n";
 		int msg_len = strlen(msg);
 		if(write(sockfd, msg, msg_len) == msg_len) {
-			printf("[thread %u] Sent: %s\n", pth, msg);
+			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;		
 	}
@@ -195,17 +221,32 @@ int delete_file(int sockfd, char* filename) {
 		char* msg = "ERROR: NO SUCH FILE\n";
 		int msg_len = strlen(msg);
 		if(write(sockfd, msg, msg_len) == msg_len) {
-			printf("[thread %u] Sent: %s\n", pth, msg);
+			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;		
 	}
 
-	rc = remove(target); // delete the file
+	// deallocate any frames and page table entries associated with this file
+	int i;
+	for(i = 0; i < N_FRAMES; i++) {
+		// first layer write lock - lock this cell of the page table
+		pthread_rwlock_wrlock(&pte_locks[i]);
+		if(page_table[i] && strcmp(page_table[i]->filename, filename) == 0) {	
+			// second layer write lock - lock the actual page table entry
+			pthread_rwlock_wrlock(&(page_table[i]->page_lock));
+				free(server_memory[i]);
+				free(page_table[i]);
+			// no need to unlock second layer because the lock no longer exists...
+			
+			printf("[thread %u] Deallocated frame %d\n", pth, i);
+		}
+		pthread_rwlock_unlock(&pte_locks[i]);
+	}
+
 	/* NOTE: thread safe apparently, will wait until all processes
 	   have closed the file */
-
-	// send acknowledgement if the delete was successful
-	if(rc == 0) {
+	// delete the file and send acknowledgement
+	if(remove(target) == 0) {
 		printf("[thread %u] Deleted %s file\n", pth, filename);
 		if(write(sockfd, "ACK\n", 4) == 4) {
 			printf("[thread %u] Sent: ACK\n", pth);
@@ -324,9 +365,10 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
-	// initialize page table entry locks and page table entries to NULL
+	// initialize page table entry locks and page table entries and server memory to NULL
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
+		server_memory[i] = NULL;
 		page_table[i] = NULL;
 		pthread_rwlock_init(pte_locks+i, NULL);
 	}
@@ -334,7 +376,7 @@ int main() {
 	while(1) {
 		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
 		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
-		printf("Received incoming connection from %s\n", "<client-hostname");
+		printf("Received incoming connection from %s\n", "<client-hostname>");
 
 		/* handle socket in new thread */
 		pthread_t thread;
@@ -347,6 +389,7 @@ int main() {
 	// free memory
 	for(i = 0; i < N_FRAMES; i++) {
 		if(page_table[i]) {
+			free(server_memory[i]);
 			free(page_table[i]);
 		}
 	}
