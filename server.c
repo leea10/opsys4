@@ -27,7 +27,8 @@ typedef struct page_table_entry {
 
 // GLOBAL VARIABLES... BEWARE.
 char server_memory[N_FRAMES * FRAME_SIZE];
-pte_t page_table[N_FRAMES];
+pte_t* page_table[N_FRAMES];
+pthread_rwlock_t pte_locks[N_FRAMES];
 
 // function to handle DIR command
 // parameter: socket descriptor to write errors and results to
@@ -84,44 +85,62 @@ int list_dir(int sockfd) {
 // parameter: content to store
 // return: number of bytes stored
 int store_file(int sockfd, char* filename, int n_bytes, char* content) {
-	int pth = (int)pthread_self(); 		 // thread ID
-	if(filename && n_bytes > 0 && content) {
-		// form the new file's relative path
-		char new_filepath[strlen(".storage/")+strlen(filename)+1];
-		sprintf(new_filepath, ".storage/%s", filename);
-		
-		// check if the file already
-		struct stat buf;
-		int rc = stat(new_filepath, &buf);	
-		if(rc >= 0) {
-			char* msg = "ERROR: FILE EXISTS\n";
-			write(sockfd, msg, strlen(msg));
-			return 0;
-		}
-
-		// create file and open for writing
-		int fd_write = open(new_filepath, 
-			O_WRONLY | O_TRUNC | O_CREAT, 
-			S_IWUSR | S_IWGRP | S_IWOTH | S_IRUSR | S_IRGRP | S_IROTH);
-		if(fd_write < 0) {
-			printf("open() failed for write file %s!", new_filepath);
-			return 0;
-		}
-
-		// write contents to file
-		int bytes_written = write(fd_write, content, n_bytes);
-		printf("[thread %u] Transferred file (%d bytes)\n", pth, bytes_written);
-
-		// send acknowledgement
-		write(sockfd, "ACK\n", 4);
-		printf("[thread %u] Sent: ACK\n", pth);
-		close(fd_write);
-		return 1;
-	} else {
+	int pth = (int)pthread_self(); // thread ID
+	
+	// validate arguments
+	if(!filename || n_bytes <= 0 || !content) {
 		char* msg = "ERROR: invalid arguments for STORE command\n";
+		write(sockfd, msg, strlen(msg));
+		return 0;		
+	}
+
+	// form the new file's relative path
+	char new_filepath[strlen(".storage/")+strlen(filename)+1];
+	sprintf(new_filepath, ".storage/%s", filename);
+	
+	// check if the file already
+	struct stat buf;
+	int rc = stat(new_filepath, &buf);	
+	if(rc >= 0) {
+		char* msg = "ERROR: FILE EXISTS\n";
 		write(sockfd, msg, strlen(msg));
 		return 0;
 	}
+
+	// set up file lock for this thread
+	struct flock write_lock;
+	write_lock.l_type = F_WRLCK; // write lock
+
+	// create file and open for writing
+	int fd_write = open(new_filepath, 
+		O_WRONLY | O_TRUNC | O_CREAT, 
+		S_IWUSR | S_IWGRP | S_IWOTH | S_IRUSR | S_IRGRP | S_IROTH);
+	if(fd_write < 0) {
+		printf("open() failed for write file %s!", new_filepath);
+		return 0;
+	}
+
+	// set the lock
+	if(fcntl(fd_write, F_SETLKW, &write_lock) < 0) {
+		perror("Write lock failed!\n");
+		return 0;
+	}
+	int bytes_written = write(fd_write, content, n_bytes); 	// write contents to file
+
+	// unlock the file
+	write_lock.l_type = F_UNLCK;
+	if(fcntl(fd_write, F_SETLK, &write_lock) < 0) {
+		perror("Unlock write lock failed!\n");
+		return 0;
+	}
+
+	printf("[thread %u] Transferred file (%d bytes)\n", pth, bytes_written);
+
+	// send acknowledgement
+	write(sockfd, "ACK\n", 4);
+	printf("[thread %u] Sent: ACK\n", pth);
+	close(fd_write);
+	return 1;
 }
 
 // function to handle READ command
@@ -129,17 +148,23 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 // parameter: name of file to read from
 // return: number of bytes read
 int read_file(int sockfd, char* filename, int byte_offset, int length) {
-	if(filename && byte_offset >= 0 && length > 0) {
-		char msg[BUFFER_SIZE]; // plus one is for the null terminator
-		sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
-			filename, byte_offset, length);
-		write(sockfd, msg, strlen(msg));
-		return 1;
-	} else {
+	int pth = (int)pthread_self();
+
+	// validate arguments
+	if(!filename || byte_offset < 0 || length < 0) {
 		char* msg = "ERROR: missing arguments for READ command\n";
-		write(sockfd, msg, strlen(msg));
+		int msg_len = strlen(msg);
+		if(write(sockfd, msg, msg_len) == msg_len) {
+			printf("[thread %u] Sent: %s\n", pth, msg);
+		}
 		return 0;
 	}
+
+	char msg[BUFFER_SIZE]; // plus one is for the null terminator
+	sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
+		filename, byte_offset, length);
+	write(sockfd, msg, strlen(msg));
+	return 1;
 }
 
 // function to handle DELETE command
@@ -147,30 +172,37 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 // parameter: name of file to delete
 // return: number of files deleted (i.e. 1 or 0)
 int delete_file(int sockfd, char* filename) {
-	// make sure filename was passed in
+	int pth = (int)pthread_self(); // thread ID
+
+	// validate arguments
 	if(!filename) {
 		char* msg = "ERROR: missing arguments for DELETE command\n";
-		write(sockfd, msg, strlen(msg));
+		int msg_len = strlen(msg);
+		if(write(sockfd, msg, msg_len) == msg_len) {
+			printf("[thread %u] Sent: %s\n", pth, msg);
+		}
 		return 0;		
 	}
-
-	int pth = (int)pthread_self(); // thread ID
 
 	// relative path of target file to delete
 	char target[strlen(".storage/") + strlen(filename)];
 	sprintf(target, ".storage/%s", filename);
 
-	int rc = remove(target); // attempt to remove
-	
-	// check if file exists
-	if(errno == ENOENT) {
+	struct stat buf;
+	int rc = stat(target, &buf);
+
+	if(rc < 0) {
 		char* msg = "ERROR: NO SUCH FILE\n";
 		int msg_len = strlen(msg);
 		if(write(sockfd, msg, msg_len) == msg_len) {
 			printf("[thread %u] Sent: %s\n", pth, msg);
 		}
-		return 0;
-	} 
+		return 0;		
+	}
+
+	rc = remove(target); // delete the file
+	/* NOTE: thread safe apparently, will wait until all processes
+	   have closed the file */
 
 	// send acknowledgement if the delete was successful
 	if(rc == 0) {
@@ -250,6 +282,7 @@ void* handle_client(void* args) {
 	fclose(client_sock);
 	close(client->sockfd);
 	free(client); // free memory allocated for this thread's arguments
+	pthread_exit(NULL);
 	return NULL;  // terminate thread
 }
 
@@ -291,6 +324,13 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
+	// initialize page table entry locks and page table entries to NULL
+	int i;
+	for(i = 0; i < N_FRAMES; i++) {
+		page_table[i] = NULL;
+		pthread_rwlock_init(pte_locks+i, NULL);
+	}
+
 	while(1) {
 		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
 		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
@@ -301,6 +341,13 @@ int main() {
 		if(pthread_create(&thread, NULL, handle_client, (void*)new_client) != 0) {
 			perror("pthread_create() failed!\n");
 			free(new_client);
+		}
+	}
+
+	// free memory
+	for(i = 0; i < N_FRAMES; i++) {
+		if(page_table[i]) {
+			free(page_table[i]);
 		}
 	}
 
