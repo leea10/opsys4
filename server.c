@@ -177,13 +177,19 @@ int find_slot() {
 	printf("start slot search\n");
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
+		pthread_rwlock_rdlock(pte_locks+i);
 		if(!page_table[i]) {
+			pthread_rwlock_unlock(pte_locks+i);
+			pthread_rwlock_wrlock(pte_locks+i);
 			return i;
 		}
+		pthread_rwlock_unlock(pte_locks+i);
+		pthread_rwlock_rdlock(&(page_table[i]->page_lock));
 		if(difftime(page_table[i]->last_used, 
 			page_table[result]->last_used) < 0) {
 			result = i;
 		}
+		pthread_rwlock_unlock(&(page_table[i]->page_lock));
 	}
 	return result;	
 }
@@ -219,9 +225,6 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		}
 		return 0;
 	}
-
-	// open the file to block from deletion
-
 
 	// make sure bytes are in range
 	if(byte_offset + length > buf.st_size) {
@@ -264,8 +267,12 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			pthread_rwlock_init(&(new_pte->page_lock), NULL);
 			pthread_rwlock_rdlock(&(new_pte->page_lock));
 
+			// find where to put this memory block
 			if(num_pages < FRAMES_PER_FILE) {
 				index = find_slot();
+				free(page_table[index]);
+				page_table[index] = new_pte;
+				pthread_rwlock_unlock(pte_locks+i);
 			} else {
 
 			}
