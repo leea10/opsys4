@@ -186,6 +186,10 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		return 0;
 	}
 
+	// get first and last page number of range requested
+	int first_page = byte_offset % FRAME_SIZE;
+	int last_page = (byte_offset + length) % FRAME_SIZE;
+
 	char msg[BUFFER_SIZE]; // plus one is for the null terminator
 	sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
 		filename, byte_offset, length);
