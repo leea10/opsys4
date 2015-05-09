@@ -148,10 +148,17 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 int search_page_table(char* filename, int page_number) {
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
-		if(page_table[i] && page_table[i]->page_number == page_number &&
-			strcmp(page_table[i]->filename, filename) == 0) {
-			return i;
+		pthread_rwlock_rdlock(pte_locks+i);
+		if(page_table[i]) {
+			pthread_rwlock_rdlock(&(page_table[i]->page_lock));
+			pthread_rwlock_unlock(pte_locks+i);
+			if(page_table[i]->page_number == page_number &&
+				strcmp(page_table[i]->filename, filename) == 0) {
+				return i;
+			}
+			pthread_rwlock_unlock(&(page_table[i]->page_lock));
 		}
+		pthread_rwlock_unlock(pte_locks+i);
 	}
 	return -1;
 }
