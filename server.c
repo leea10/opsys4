@@ -144,6 +144,19 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 	return bytes_written;
 }
 
+// function to check if a page exists in memory
+int search_page_table(char* filename, int page_number) {
+	int i;
+	for(i = 0; i < N_FRAMES; i++) {
+		if(page_table[i] && page_table[i]->page_number == page_number &&
+			strcmp(page_table[i]->filename, filename) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+
 // function to handle READ command
 // parameter: socket descriptor to write errors and results to
 // parameter: name of file to read from
@@ -189,6 +202,12 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	// get first and last page number of range requested
 	int first_page = byte_offset % FRAME_SIZE;
 	int last_page = (byte_offset + length) % FRAME_SIZE;
+	
+	int page;
+	for(page = first_page; page <= last_page; page++) {
+		int i = search_page_table(filename, page);
+	}
+
 
 	char msg[BUFFER_SIZE]; // plus one is for the null terminator
 	sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
