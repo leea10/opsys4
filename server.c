@@ -144,25 +144,49 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 	return bytes_written;
 }
 
-// function to check if a page exists in memory
-int search_page_table(char* filename, int page_number) {
+// store and rdlock all pages of this file that are in the page table
+// return the number of pages found
+int get_all_pages(char* filename, int* all_pages) {
+	int num_pages = 0;
+	all_pages = (int*)malloc(FRAMES_PER_FILE*sizeof(int));
+	
 	int i;
+	printf("start search\n");
 	for(i = 0; i < N_FRAMES; i++) {
 		pthread_rwlock_rdlock(pte_locks+i);
 		if(page_table[i]) {
 			pthread_rwlock_rdlock(&(page_table[i]->page_lock));
 			pthread_rwlock_unlock(pte_locks+i);
-			if(page_table[i]->page_number == page_number &&
-				strcmp(page_table[i]->filename, filename) == 0) {
-				return i;
+			if(strcmp(page_table[i]->filename, filename) == 0) {
+				*(all_pages + num_pages) = i;
+				num_pages++;
+			} else {
+				pthread_rwlock_unlock(&(page_table[i]->page_lock));
 			}
-			pthread_rwlock_unlock(&(page_table[i]->page_lock));
+		} else {
+			pthread_rwlock_unlock(pte_locks+i);			
 		}
-		pthread_rwlock_unlock(pte_locks+i);
 	}
-	return -1;
+	return num_pages;
 }
 
+// function to find an empty slot in memory or the least recently used
+// also lock the page table entry chosen
+int find_slot() {
+	int result = 0;
+	printf("start slot search\n");
+	int i;
+	for(i = 0; i < N_FRAMES; i++) {
+		if(!page_table[i]) {
+			return i;
+		}
+		if(difftime(page_table[i]->last_used, 
+			page_table[result]->last_used) < 0) {
+			result = i;
+		}
+	}
+	return result;	
+}
 
 // function to handle READ command
 // parameter: socket descriptor to write errors and results to
@@ -196,6 +220,9 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		return 0;
 	}
 
+	// open the file to block from deletion
+
+
 	// make sure bytes are in range
 	if(byte_offset + length > buf.st_size) {
 		char* msg = "ERROR: INVALID BYTE RANGE\n";
@@ -207,12 +234,42 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	}
 
 	// get first and last page number of range requested
-	int first_page = byte_offset % FRAME_SIZE;
-	int last_page = (byte_offset + length) % FRAME_SIZE;
+	int first_page = byte_offset / FRAME_SIZE;
+	int last_page = (byte_offset + length) / FRAME_SIZE;
+
+	// number of pages belonging to this file currently in memory
+	int* all_pages = NULL;
+	int num_pages = get_all_pages(filename, all_pages);
 	
 	int page;
 	for(page = first_page; page <= last_page; page++) {
-		int i = search_page_table(filename, page);
+		// find in page table
+		int i = 0;
+		int index = -1;
+		while(i < num_pages) {
+			if(page_table[all_pages[i]]->page_number == page) {
+				index = all_pages[i];
+			}
+			i++;
+		}
+
+		// not found
+		if(index < 0) {
+			// prepare table entry
+			pte_t* new_pte = (pte_t*)malloc(sizeof(pte_t));
+			new_pte->filename = (char*)malloc((strlen(filename)+1)*sizeof(char));
+			sprintf(new_pte->filename, "%s", filename);
+			new_pte->page_number = page;
+			new_pte->last_used = time(NULL);
+			pthread_rwlock_init(&(new_pte->page_lock), NULL);
+			pthread_rwlock_rdlock(&(new_pte->page_lock));
+
+			if(num_pages < FRAMES_PER_FILE) {
+				index = find_slot();
+			} else {
+
+			}
+		}
 	}
 
 
@@ -244,11 +301,16 @@ int delete_file(int sockfd, char* filename) {
 	char target[strlen(".storage/") + strlen(filename)];
 	sprintf(target, ".storage/%s", filename);
 
-	struct stat buf;
-	int rc = stat(target, &buf);
-
-	if(rc < 0) {
-		char* msg = "ERROR: NO SUCH FILE\n";
+	/* NOTE: thread safe apparently, will wait until all processes
+	   have closed the file */
+	// delete the file and send acknowledgement
+	if(remove(target) != 0) {
+		char* msg;	
+		if(errno == ENOENT) {	
+			msg = "ERROR: NO SUCH FILE\n";
+		} else {
+			msg = "ERROR: UNABLE TO REMOVE FILE\n";
+		}
 		int msg_len = strlen(msg);
 		if(write(sockfd, msg, msg_len) == msg_len) {
 			printf("[thread %u] Sent: %s", pth, msg);
@@ -273,17 +335,12 @@ int delete_file(int sockfd, char* filename) {
 		pthread_rwlock_unlock(&pte_locks[i]);
 	}
 
-	/* NOTE: thread safe apparently, will wait until all processes
-	   have closed the file */
-	// delete the file and send acknowledgement
-	if(remove(target) == 0) {
-		printf("[thread %u] Deleted %s file\n", pth, filename);
-		if(write(sockfd, "ACK\n", 4) == 4) {
-			printf("[thread %u] Sent: ACK\n", pth);
-		}
-		return 1;
+	// send acknowledgement
+	printf("[thread %u] Deleted %s file\n", pth, filename);
+	if(write(sockfd, "ACK\n", 4) == 4) {
+		printf("[thread %u] Sent: ACK\n", pth);
 	}
-	return 0; // something else went wrong
+	return 1;
 }
 
 // arguments for handle_client() thread function
