@@ -23,13 +23,11 @@ typedef struct page_table_entry {
 	char* filename;
 	int page_number;
 	time_t last_used;
-	pthread_rwlock_t page_lock;
 } pte_t;
 
 // GLOBAL VARIABLES... BEWARE.
 char* server_memory[N_FRAMES];
 pte_t* page_table[N_FRAMES];
-pthread_rwlock_t pte_locks[N_FRAMES];
 
 // function to handle DIR command
 // parameter: socket descriptor to write errors and results to
@@ -153,18 +151,11 @@ int get_all_pages(char* filename, int* all_pages) {
 	int i;
 	printf("start search\n");
 	for(i = 0; i < N_FRAMES; i++) {
-		pthread_rwlock_rdlock(pte_locks+i);
 		if(page_table[i]) {
-			pthread_rwlock_rdlock(&(page_table[i]->page_lock));
-			pthread_rwlock_unlock(pte_locks+i);
 			if(strcmp(page_table[i]->filename, filename) == 0) {
 				*(all_pages + num_pages) = i;
 				num_pages++;
-			} else {
-				pthread_rwlock_unlock(&(page_table[i]->page_lock));
 			}
-		} else {
-			pthread_rwlock_unlock(pte_locks+i);			
 		}
 	}
 	return num_pages;
@@ -177,19 +168,13 @@ int find_slot() {
 	printf("start slot search\n");
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
-		pthread_rwlock_rdlock(pte_locks+i);
 		if(!page_table[i]) {
-			pthread_rwlock_unlock(pte_locks+i);
-			pthread_rwlock_wrlock(pte_locks+i);
 			return i;
 		}
-		pthread_rwlock_unlock(pte_locks+i);
-		pthread_rwlock_rdlock(&(page_table[i]->page_lock));
 		if(difftime(page_table[i]->last_used, 
 			page_table[result]->last_used) < 0) {
 			result = i;
 		}
-		pthread_rwlock_unlock(&(page_table[i]->page_lock));
 	}
 	return result;	
 }
@@ -264,21 +249,22 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
 			new_pte->last_used = time(NULL);
-			pthread_rwlock_init(&(new_pte->page_lock), NULL);
-			pthread_rwlock_rdlock(&(new_pte->page_lock));
+
+			// get the bytes from the file
+			int fd = open(target, 'r');
+			lseek(fd, page * FRAME_SIZE, SEEK_SET);
+			close(fd);
 
 			// find where to put this memory block
 			if(num_pages < FRAMES_PER_FILE) {
 				index = find_slot();
 				free(page_table[index]);
 				page_table[index] = new_pte;
-				pthread_rwlock_unlock(pte_locks+i);
 			} else {
 
 			}
 		}
 	}
-
 
 	char msg[BUFFER_SIZE]; // plus one is for the null terminator
 	sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
@@ -308,15 +294,11 @@ int delete_file(int sockfd, char* filename) {
 	char target[strlen(".storage/") + strlen(filename)];
 	sprintf(target, ".storage/%s", filename);
 
-	/* NOTE: thread safe apparently, will wait until all processes
-	   have closed the file */
-	// delete the file and send acknowledgement
-	if(remove(target) != 0) {
+	struct stat buf;	
+	if(stat(target, &buf) < 0) {
 		char* msg;	
 		if(errno == ENOENT) {	
 			msg = "ERROR: NO SUCH FILE\n";
-		} else {
-			msg = "ERROR: UNABLE TO REMOVE FILE\n";
 		}
 		int msg_len = strlen(msg);
 		if(write(sockfd, msg, msg_len) == msg_len) {
@@ -328,26 +310,25 @@ int delete_file(int sockfd, char* filename) {
 	// deallocate any frames and page table entries associated with this file
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
-		// first layer write lock - lock this cell of the page table
-		pthread_rwlock_wrlock(&pte_locks[i]);
 		if(page_table[i] && strcmp(page_table[i]->filename, filename) == 0) {	
 			// second layer write lock - lock the actual page table entry
-			pthread_rwlock_wrlock(&(page_table[i]->page_lock));
-				free(server_memory[i]);
-				free(page_table[i]);
+			free(server_memory[i]);
+			free(page_table[i]);
 			// no need to unlock second layer because the lock no longer exists...
 			
 			printf("[thread %u] Deallocated frame %d\n", pth, i);
 		}
-		pthread_rwlock_unlock(&pte_locks[i]);
 	}
 
 	// send acknowledgement
-	printf("[thread %u] Deleted %s file\n", pth, filename);
-	if(write(sockfd, "ACK\n", 4) == 4) {
-		printf("[thread %u] Sent: ACK\n", pth);
+	if(remove(target) == 0) {
+		printf("[thread %u] Deleted %s file\n", pth, filename);
+		if(write(sockfd, "ACK\n", 4) == 4) {
+			printf("[thread %u] Sent: ACK\n", pth);
+		}
+		return 1;
 	}
-	return 1;
+	return 0;
 }
 
 // arguments for handle_client() thread function
@@ -459,14 +440,6 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
-	// initialize page table entry locks and page table entries and server memory to NULL
-	int i;
-	for(i = 0; i < N_FRAMES; i++) {
-		server_memory[i] = NULL;
-		page_table[i] = NULL;
-		pthread_rwlock_init(pte_locks+i, NULL);
-	}
-
 	while(1) {
 		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
 		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
@@ -481,6 +454,7 @@ int main() {
 	}
 
 	// free memory
+	int i;
 	for(i = 0; i < N_FRAMES; i++) {
 		if(page_table[i]) {
 			free(server_memory[i]);
