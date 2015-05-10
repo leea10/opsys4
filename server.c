@@ -225,7 +225,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 
 	// get first and last page number of range requested
 	int first_page = byte_offset / FRAME_SIZE;
-	int last_page = (byte_offset + length) / FRAME_SIZE;
+	int last_page = (byte_offset + length - 1) / FRAME_SIZE;
 
 	// number of pages belonging to this file currently in memory
 	int* all_pages = (int*)malloc(FRAMES_PER_FILE*sizeof(int));
@@ -309,14 +309,55 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			close(fd);
 		}
 
-		// send bytes over
+		// determine file bytes to send over
+		char packet[BUFFER_SIZE];
+		int from = 0;
+		if(page == first_page && page == last_page) {
+			// all content contained on one page
+			strncpy(packet, server_memory[index] + byte_offset % FRAME_SIZE, length);
+			packet[length] = '\0';
+			from = byte_offset;
+		} else if(page == first_page) {
+			// this is the first page to be copied (of multiple)
+				// could start in the middle of a frame, but will end on the end of the frame
+			strncpy(packet, server_memory[index] + byte_offset % FRAME_SIZE, FRAME_SIZE);
+			from = byte_offset;
+		} else if(page == last_page) {
+			// this is the last page to be copied (of multiple)
+				// could end in the middle of a frame, but will start on the beginning of one
+			int len = (byte_offset + length -1) % FRAME_SIZE + 1; 
+			strncpy(packet, server_memory[index], len);
+			packet[len] = '\0';
+			from = page * FRAME_SIZE;
+		} else {
+			// a page in the middle of multiple pages
+				// the whole page will need to be copied start to end
+			strncpy(packet, server_memory[index], FRAME_SIZE);
+			from = page * FRAME_SIZE;
+		}
 
+		// update last time used
+		page_table[index]->last_used = time(NULL);
+
+		// send over the file bytes along with "ACK"
+		int packet_len = strlen(packet);
+		char ack[BUFFER_SIZE];
+		sprintf(ack, "ACK %d\n", packet_len);
+		int ack_len = strlen(ack);
+		if(write(sockfd, ack, ack_len) == ack_len) {
+			printf("[thread %u] Sent: %s", pth, ack);	
+			if(write(sockfd, packet, packet_len) == packet_len) {
+				printf("[thread %u] Transferred %d bytes from offset %d\n",
+					pth, packet_len, from);
+			}		
+		}
 	}
-
+	/*
 	char msg[BUFFER_SIZE]; // plus one is for the null terminator
 	sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
 		filename, byte_offset, length);
 	write(sockfd, msg, strlen(msg));
+	*/
 	return 1;
 }
 
