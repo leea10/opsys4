@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -15,7 +16,7 @@
 
 #define BUFFER_SIZE 1024
 #define N_FRAMES 32
-#define FRAME_SIZE 1024
+#define FRAME_SIZE 10
 #define FRAMES_PER_FILE 4
 
 // struct for page table entries
@@ -146,10 +147,9 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 // return the number of pages found
 int get_all_pages(char* filename, int* all_pages) {
 	int num_pages = 0;
-	all_pages = (int*)malloc(FRAMES_PER_FILE*sizeof(int));
 	
 	int i;
-	printf("start search\n");
+	//printf("start search\n");
 	for(i = 0; i < N_FRAMES; i++) {
 		if(page_table[i]) {
 			if(strcmp(page_table[i]->filename, filename) == 0) {
@@ -165,10 +165,11 @@ int get_all_pages(char* filename, int* all_pages) {
 // also lock the page table entry chosen
 int find_slot() {
 	int result = 0;
-	printf("start slot search\n");
+	//printf("start slot search\n");
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
 		if(!page_table[i]) {
+			//printf("found empty slot %d\n", i);
 			return i;
 		}
 		if(difftime(page_table[i]->last_used, 
@@ -176,6 +177,7 @@ int find_slot() {
 			result = i;
 		}
 	}
+	//printf("found least recently used slot %d\n", result);
 	return result;	
 }
 
@@ -226,8 +228,19 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	int last_page = (byte_offset + length) / FRAME_SIZE;
 
 	// number of pages belonging to this file currently in memory
-	int* all_pages = NULL;
+	int* all_pages = (int*)malloc(FRAMES_PER_FILE*sizeof(int));
 	int num_pages = get_all_pages(filename, all_pages);
+
+	/* test print 
+	printf("there are currently %d pages stored for %s", num_pages, filename);
+	if(num_pages > 0) {
+		printf(" at slots ");
+	}
+	int i;
+	for(i = 0; i < num_pages; i++) {
+		printf("%d ", all_pages[i]);
+	}	printf("\n");
+	*/
 	
 	int page;
 	for(page = first_page; page <= last_page; page++) {
@@ -237,12 +250,14 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		while(i < num_pages) {
 			if(page_table[all_pages[i]]->page_number == page) {
 				index = all_pages[i];
+				//printf("found page %d in memory at slot %d\n", page, index);
 			}
 			i++;
 		}
 
 		// not found
 		if(index < 0) {
+			//printf("page %d not found in memory... loading...\n", page);
 			// prepare table entry
 			pte_t* new_pte = (pte_t*)malloc(sizeof(pte_t));
 			new_pte->filename = (char*)malloc((strlen(filename)+1)*sizeof(char));
@@ -253,17 +268,49 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			// get the bytes from the file
 			int fd = open(target, 'r');
 			lseek(fd, page * FRAME_SIZE, SEEK_SET);
-			close(fd);
 
 			// find where to put this memory block
+			int replaced_page = -1;
 			if(num_pages < FRAMES_PER_FILE) {
+				// this file still has room in the memory for more frames
 				index = find_slot();
-				free(page_table[index]);
-				page_table[index] = new_pte;
+				*(all_pages + num_pages) = index;
+				num_pages++;
 			} else {
-
+				// need to replace one of the current file's frames
+				index = all_pages[0];
+				for(i = 1; i < num_pages; i++) {
+					if(difftime(page_table[all_pages[i]]->last_used, 
+						page_table[index]->last_used) < 0) {
+						index = all_pages[i];
+					}					
+				}
+				replaced_page = page_table[all_pages[index]]->page_number;
 			}
+
+			// replace the page
+			if(page_table[index]) {
+				free(page_table[index]);					
+			}	
+			page_table[index] = new_pte;
+			printf("[thread %u] Allocated page %d to frame %d",
+				pth, page, index);
+			if(replaced_page > 0) {
+				printf(" (replaced page %d)", replaced_page);
+			}
+			printf("\n");
+
+			// place the memory into the server
+			if(server_memory[index]) {
+				free(server_memory[index]);				
+			}	
+			server_memory[index] = (char*)malloc(FRAME_SIZE*sizeof(char));
+			read(fd, server_memory[index], FRAME_SIZE);
+			close(fd);
 		}
+
+		// send bytes over
+
 	}
 
 	char msg[BUFFER_SIZE]; // plus one is for the null terminator
@@ -311,7 +358,6 @@ int delete_file(int sockfd, char* filename) {
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
 		if(page_table[i] && strcmp(page_table[i]->filename, filename) == 0) {	
-			// second layer write lock - lock the actual page table entry
 			free(server_memory[i]);
 			free(page_table[i]);
 			// no need to unlock second layer because the lock no longer exists...
@@ -440,6 +486,13 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
+	// initialize global lvariables to null
+	int i;
+	for(i = 0; i < N_FRAMES; i++) {
+		page_table[i] = NULL;
+		server_memory[i] = NULL;
+	}
+
 	while(1) {
 		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
 		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
@@ -454,7 +507,6 @@ int main() {
 	}
 
 	// free memory
-	int i;
 	for(i = 0; i < N_FRAMES; i++) {
 		if(page_table[i]) {
 			free(server_memory[i]);
