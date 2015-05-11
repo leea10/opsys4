@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 1024
-#define N_FRAMES 32
+#define N_FRAMES 8
 #define FRAME_SIZE 10
 #define FRAMES_PER_FILE 4
 
@@ -230,17 +230,6 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	// number of pages belonging to this file currently in memory
 	int* all_pages = (int*)malloc(FRAMES_PER_FILE*sizeof(int));
 	int num_pages = get_all_pages(filename, all_pages);
-
-	/* test print 
-	printf("there are currently %d pages stored for %s", num_pages, filename);
-	if(num_pages > 0) {
-		printf(" at slots ");
-	}
-	int i;
-	for(i = 0; i < num_pages; i++) {
-		printf("%d ", all_pages[i]);
-	}	printf("\n");
-	*/
 	
 	int page;
 	for(page = first_page; page <= last_page; page++) {
@@ -264,6 +253,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
 			new_pte->last_used = time(NULL);
+			//printf("created new page\n");
 
 			// get the bytes from the file
 			int fd = open(target, 'r');
@@ -272,11 +262,13 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			// find where to put this memory block
 			int replaced_page = -1;
 			if(num_pages < FRAMES_PER_FILE) {
+				//printf("Let's find a slot\n");
 				// this file still has room in the memory for more frames
 				index = find_slot();
 				*(all_pages + num_pages) = index;
 				num_pages++;
 			} else {
+				//printf("Max slots for this file, finding replace\n");
 				// need to replace one of the current file's frames
 				index = all_pages[0];
 				for(i = 1; i < num_pages; i++) {
@@ -285,7 +277,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 						index = all_pages[i];
 					}					
 				}
-				replaced_page = page_table[all_pages[index]]->page_number;
+				replaced_page = page_table[index]->page_number;
 			}
 
 			// replace the page
@@ -295,7 +287,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			page_table[index] = new_pte;
 			printf("[thread %u] Allocated page %d to frame %d",
 				pth, page, index);
-			if(replaced_page > 0) {
+			if(replaced_page >= 0) {
 				printf(" (replaced page %d)", replaced_page);
 			}
 			printf("\n");
