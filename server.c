@@ -24,7 +24,7 @@
 typedef struct page_table_entry {
 	char* filename;
 	int page_number;
-	int last_used;
+	struct timeval* last_used;
 } pte_t;
 
 // GLOBAL VARIABLES... BEWARE.
@@ -38,6 +38,7 @@ int list_dir(int sockfd) {
 	int num_files = 0;                // count of the number of files in the directory
 	int file_list_size = BUFFER_SIZE; // initial size of the file list in bytes
 	char* file_list = (char*)malloc(file_list_size*sizeof(char)); // file list
+	file_list[0] = '\0'; // null terminate just in case file_list will be empty
 	int i = 0; // position that we are writing to in the file list	
 
 	// read directory
@@ -67,7 +68,7 @@ int list_dir(int sockfd) {
 		sprintf(file_list+i, "%s\n", file->d_name); 
 		i += filename_len + 1; // move our current position forward
 	}
-	
+
 	// send result to client
 	char msg[strlen(file_list)+8];
 	sprintf(msg, "%d\n%s", num_files, file_list);
@@ -126,7 +127,7 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 		perror("Write lock failed!\n");
 		return 0;
 	}
-	int bytes_written = write(fd_write, content, n_bytes+1); 	// write contents to file
+	int bytes_written = write(fd_write, content, n_bytes); 	// write contents to file
 
 	// unlock the file
 	write_lock.l_type = F_UNLCK;
@@ -150,7 +151,6 @@ int get_all_pages(char* filename, int* all_pages) {
 	int num_pages = 0;
 	
 	int i;
-	//printf("start search\n");
 	for(i = 0; i < N_FRAMES; i++) {
 		if(page_table[i]) {
 			if(strcmp(page_table[i]->filename, filename) == 0) {
@@ -166,18 +166,17 @@ int get_all_pages(char* filename, int* all_pages) {
 // also lock the page table entry chosen
 int find_slot() {
 	int result = 0;
-	//printf("start slot search\n");
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
 		if(!page_table[i]) {
-			//printf("found empty slot %d\n", i);
 			return i;
 		}
-		if(page_table[result]->last_used - page_table[i]->last_used > 0) {
+		if(page_table[i]->last_used->tv_sec < page_table[result]->last_used->tv_sec ||
+			(page_table[i]->last_used->tv_sec == page_table[result]->last_used->tv_sec
+			&& page_table[i]->last_used->tv_usec < page_table[result]->last_used->tv_usec)) {
 			result = i;
 		}
 	}
-	//printf("found least recently used slot %d\n", result);
 	return result;	
 }
 
@@ -252,7 +251,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			new_pte->filename = (char*)malloc((strlen(filename)+1)*sizeof(char));
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
-			new_pte->last_used = 0;
+			new_pte->last_used = NULL;
 			//printf("created new page\n");
 
 			// get the bytes from the file
@@ -272,10 +271,12 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 				// need to replace one of the current file's frames
 				index = all_pages[0];
 				for(i = 1; i < num_pages; i++) {
-					if(page_table[index]->last_used - 
-						page_table[all_pages[i]]->last_used > 0) {
+					// compare seconds
+					if(page_table[all_pages[i]]->last_used->tv_sec < page_table[index]->last_used->tv_sec ||
+						(page_table[all_pages[i]]->last_used->tv_sec == page_table[index]->last_used->tv_sec
+						&& page_table[all_pages[i]]->last_used->tv_usec < page_table[index]->last_used->tv_usec)) {
 						index = all_pages[i];
-					}					
+					}
 				}
 				replaced_page = page_table[index]->page_number;
 			}
@@ -313,6 +314,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			// this is the first page to be copied (of multiple)
 				// could start in the middle of a frame, but will end on the end of the frame
 			strncpy(packet, server_memory[index] + byte_offset % FRAME_SIZE, FRAME_SIZE);
+			packet[strlen(packet)] = '\0';
 			from = byte_offset;
 		} else if(page == last_page) {
 			// this is the last page to be copied (of multiple)
@@ -330,9 +332,9 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		}
 
 		// update last time used
-		struct timeval now_time;
-		gettimeofday(&now_time, NULL);
-		page_table[index]->last_used = now_time.tv_usec;
+		struct timeval* now_time = (struct timeval*)malloc(sizeof(struct timeval));
+		gettimeofday(now_time, NULL);
+		page_table[index]->last_used = now_time;
 
 		// send over the file bytes along with "ACK"
 		int packet_len = strlen(packet);
@@ -347,12 +349,6 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			}		
 		}
 	}
-	/*
-	char msg[BUFFER_SIZE]; // plus one is for the null terminator
-	sprintf(msg, "READ file: '%s' from byte %d (%d bytes)\n", 
-		filename, byte_offset, length);
-	write(sockfd, msg, strlen(msg));
-	*/
 	return 1;
 }
 
@@ -448,10 +444,17 @@ void* handle_client(void* args) {
 			if(arg2) {                          // convert to integer
 				char* endptr;
 				n_bytes = strtol(arg2, &endptr, 10);
-				content = (char*)malloc(n_bytes*sizeof(char)+1);
-				fgets(content, n_bytes+1, client_sock);
+				content = (char*)malloc((n_bytes+1)*sizeof(char));
+				
+				// read contents until specified number of bytes are read
+				int total_bytes_read = 0;
+				while(total_bytes_read < n_bytes) {	
+					total_bytes_read += read(client->sockfd, 
+						content+total_bytes_read, n_bytes-total_bytes_read);
+				}
+				content[n_bytes] = '\0';
 			}
-			store_file(client->sockfd, filename, n_bytes+1, content);
+			store_file(client->sockfd, filename, n_bytes, content);
 			free(content);
 		} else if(strcmp(cmd, "READ") == 0) {
 			char* filename = strtok(NULL, " "); // name of the file to read from
