@@ -71,7 +71,7 @@ int list_dir(int sockfd) {
 	// send result to client
 	char msg[strlen(file_list)+8];
 	sprintf(msg, "%d\n%s", num_files, file_list);
-	write(sockfd, msg, strlen(msg));
+	write(sockfd, msg, strlen(msg)+1);
 	
 	// free memory
 	closedir(directory);
@@ -91,7 +91,7 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 	// validate arguments
 	if(!filename || n_bytes <= 0 || !content) {
 		char* msg = "ERROR: invalid arguments for STORE command\n";
-		write(sockfd, msg, strlen(msg));
+		write(sockfd, msg, strlen(msg)+1);
 		return 0;		
 	}
 
@@ -99,12 +99,12 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 	char new_filepath[strlen(".storage/")+strlen(filename)+1];
 	sprintf(new_filepath, ".storage/%s", filename);
 	
-	// check if the file already
+	// check if the file already exists
 	struct stat buf;
 	int rc = stat(new_filepath, &buf);	
 	if(rc >= 0) {
 		char* msg = "ERROR: FILE EXISTS\n";
-		write(sockfd, msg, strlen(msg));
+		write(sockfd, msg, strlen(msg)+1);
 		return 0;
 	}
 
@@ -126,7 +126,7 @@ int store_file(int sockfd, char* filename, int n_bytes, char* content) {
 		perror("Write lock failed!\n");
 		return 0;
 	}
-	int bytes_written = write(fd_write, content, n_bytes); 	// write contents to file
+	int bytes_written = write(fd_write, content, n_bytes+1); 	// write contents to file
 
 	// unlock the file
 	write_lock.l_type = F_UNLCK;
@@ -192,7 +192,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	if(!filename || byte_offset < 0 || length < 0) {
 		char* msg = "ERROR: missing arguments for READ command\n";
 		int msg_len = strlen(msg);
-		if(write(sockfd, msg, msg_len) == msg_len) {
+		if(write(sockfd, msg, msg_len+1) == msg_len+1) {
 			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;
@@ -207,7 +207,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	if(stat(target, &buf) < 0) {
 		char* msg = "ERROR: NO SUCH FILE\n";
 		int msg_len = strlen(msg);
-		if(write(sockfd, msg, msg_len) == msg_len) {
+		if(write(sockfd, msg, msg_len+1) == msg_len+1) {
 			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;
@@ -217,7 +217,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 	if(byte_offset + length > buf.st_size) {
 		char* msg = "ERROR: INVALID BYTE RANGE\n";
 		int msg_len = strlen(msg);
-		if(write(sockfd, msg, msg_len) == msg_len) {
+		if(write(sockfd, msg, msg_len+1) == msg_len+1) {
 			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;
@@ -326,6 +326,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 				// the whole page will need to be copied start to end
 			strncpy(packet, server_memory[index], FRAME_SIZE);
 			from = page * FRAME_SIZE;
+			packet[FRAME_SIZE] = '\0';
 		}
 
 		// update last time used
@@ -338,9 +339,9 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		char ack[BUFFER_SIZE];
 		sprintf(ack, "ACK %d\n", packet_len);
 		int ack_len = strlen(ack);
-		if(write(sockfd, ack, ack_len) == ack_len) {
+		if(write(sockfd, ack, ack_len+1) == ack_len+1) {
 			printf("[thread %u] Sent: %s", pth, ack);	
-			if(write(sockfd, packet, packet_len) == packet_len) {
+			if(write(sockfd, packet, packet_len+1) == packet_len+1) {
 				printf("[thread %u] Transferred %d bytes from offset %d\n",
 					pth, packet_len, from);
 			}		
@@ -366,7 +367,7 @@ int delete_file(int sockfd, char* filename) {
 	if(!filename) {
 		char* msg = "ERROR: missing arguments for DELETE command\n";
 		int msg_len = strlen(msg);
-		if(write(sockfd, msg, msg_len) == msg_len) {
+		if(write(sockfd, msg, msg_len+1) == msg_len+1) {
 			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;		
@@ -383,7 +384,7 @@ int delete_file(int sockfd, char* filename) {
 			msg = "ERROR: NO SUCH FILE\n";
 		}
 		int msg_len = strlen(msg);
-		if(write(sockfd, msg, msg_len) == msg_len) {
+		if(write(sockfd, msg, msg_len+1) == msg_len+1) {
 			printf("[thread %u] Sent: %s", pth, msg);
 		}
 		return 0;		
@@ -436,7 +437,7 @@ void* handle_client(void* args) {
 		char* cmd = strtok(full_cmd, " ");
 		if(!cmd) {
 			char* msg = "ERROR: Empty command\n";
-			write(client->sockfd, msg, strlen(msg));
+			write(client->sockfd, msg, strlen(msg)+1);
 		} else if(strcmp(cmd, "DIR") == 0) {
 			list_dir(client->sockfd);
 		} else if(strcmp(cmd, "STORE") == 0) {
@@ -447,10 +448,10 @@ void* handle_client(void* args) {
 			if(arg2) {                          // convert to integer
 				char* endptr;
 				n_bytes = strtol(arg2, &endptr, 10);
-				content = (char*)malloc(n_bytes*sizeof(char));
-				fgets(content, n_bytes, client_sock);
+				content = (char*)malloc(n_bytes*sizeof(char)+1);
+				fgets(content, n_bytes+1, client_sock);
 			}
-			store_file(client->sockfd, filename, n_bytes, content);
+			store_file(client->sockfd, filename, n_bytes+1, content);
 			free(content);
 		} else if(strcmp(cmd, "READ") == 0) {
 			char* filename = strtok(NULL, " "); // name of the file to read from
@@ -469,9 +470,9 @@ void* handle_client(void* args) {
 			char* filename = strtok(NULL, " ");
 			delete_file(client->sockfd, filename);
 		} else {
-			char unknown_cmd_err[strlen(cmd)+27];
+			char unknown_cmd_err[BUFFER_SIZE];
 			sprintf(unknown_cmd_err, "ERROR: Unknown command '%s'\n", cmd);
-			write(client->sockfd, unknown_cmd_err, strlen(unknown_cmd_err));
+			write(client->sockfd, unknown_cmd_err, strlen(unknown_cmd_err)+1);
 		}
 	}
 
