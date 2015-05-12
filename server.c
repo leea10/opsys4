@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -23,7 +24,7 @@
 typedef struct page_table_entry {
 	char* filename;
 	int page_number;
-	time_t last_used;
+	int last_used;
 } pte_t;
 
 // GLOBAL VARIABLES... BEWARE.
@@ -172,8 +173,7 @@ int find_slot() {
 			//printf("found empty slot %d\n", i);
 			return i;
 		}
-		if(difftime(page_table[i]->last_used, 
-			page_table[result]->last_used) < 0) {
+		if(page_table[result]->last_used - page_table[i]->last_used > 0) {
 			result = i;
 		}
 	}
@@ -252,7 +252,7 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			new_pte->filename = (char*)malloc((strlen(filename)+1)*sizeof(char));
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
-			new_pte->last_used = time(NULL);
+			new_pte->last_used = 0;
 			//printf("created new page\n");
 
 			// get the bytes from the file
@@ -272,8 +272,8 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 				// need to replace one of the current file's frames
 				index = all_pages[0];
 				for(i = 1; i < num_pages; i++) {
-					if(difftime(page_table[all_pages[i]]->last_used, 
-						page_table[index]->last_used) < 0) {
+					if(page_table[index]->last_used - 
+						page_table[all_pages[i]]->last_used > 0) {
 						index = all_pages[i];
 					}					
 				}
@@ -329,7 +329,9 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		}
 
 		// update last time used
-		page_table[index]->last_used = time(NULL);
+		struct timeval now_time;
+		gettimeofday(&now_time, NULL);
+		page_table[index]->last_used = now_time.tv_usec;
 
 		// send over the file bytes along with "ACK"
 		int packet_len = strlen(packet);
