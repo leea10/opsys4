@@ -531,7 +531,11 @@ int main() {
 	while(1) {
 		client_t* new_client = (client_t*)malloc(sizeof(client_t)); // thread function arguments
 		new_client->sockfd =  accept(sockfd, (struct sockaddr*)&client_address, (socklen_t*)&fromlen);
-		printf("Received incoming connection from %s\n", "<client-hostname>");
+		printf("Received incoming connection from %d.%d.%d.%d\n",
+	  		(int)(client_address.sin_addr.s_addr&0xFF),
+  			(int)((client_address.sin_addr.s_addr&0xFF00)>>8),
+  			(int)((client_address.sin_addr.s_addr&0xFF0000)>>16),
+  			(int)((client_address.sin_addr.s_addr&0xFF000000)>>24));
 
 		/* handle socket in new thread */
 		pthread_t thread;
