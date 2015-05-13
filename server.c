@@ -30,6 +30,7 @@ typedef struct page_table_entry {
 // GLOBAL VARIABLES... BEWARE.
 char* server_memory[N_FRAMES];
 pte_t* page_table[N_FRAMES];
+pthread_mutex_t page_table_lock;
 
 // function to handle DIR command
 // parameter: socket descriptor to write errors and results to
@@ -252,7 +253,6 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
 			new_pte->last_used = NULL;
-			//printf("created new page\n");
 
 			// get the bytes from the file
 			int fd = open(target, 'r');
@@ -313,8 +313,9 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		} else if(page == first_page) {
 			// this is the first page to be copied (of multiple)
 				// could start in the middle of a frame, but will end on the end of the frame
-			strncpy(packet, server_memory[index] + byte_offset % FRAME_SIZE, FRAME_SIZE);
-			packet[strlen(packet)] = '\0';
+			int len = FRAME_SIZE - byte_offset % FRAME_SIZE;
+			strncpy(packet, server_memory[index] + byte_offset % FRAME_SIZE, len);
+			packet[len] = '\0';
 			from = byte_offset;
 		} else if(page == last_page) {
 			// this is the last page to be copied (of multiple)
@@ -370,7 +371,7 @@ int delete_file(int sockfd, char* filename) {
 	}
 
 	// relative path of target file to delete
-	char target[strlen(".storage/") + strlen(filename)];
+	char target[strlen(".storage/") + strlen(filename)+1];
 	sprintf(target, ".storage/%s", filename);
 
 	struct stat buf;	
@@ -389,12 +390,13 @@ int delete_file(int sockfd, char* filename) {
 	// deallocate any frames and page table entries associated with this file
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
-		if(page_table[i] && strcmp(page_table[i]->filename, filename) == 0) {	
-			free(server_memory[i]);
-			free(page_table[i]);
-			// no need to unlock second layer because the lock no longer exists...
-			
-			printf("[thread %u] Deallocated frame %d\n", pth, i);
+		if(page_table[i]) {
+		 	if(strcmp(page_table[i]->filename, filename) == 0) {	
+				free(page_table[i]);
+				page_table[i] = NULL;			
+				// no need to unlock page because the lock no longer exists...
+				printf("[thread %u] Deallocated frame %d\n", pth, i);
+			}
 		}
 	}
 
@@ -551,8 +553,11 @@ int main() {
 
 	// free memory
 	for(i = 0; i < N_FRAMES; i++) {
-		if(page_table[i]) {
+		if(server_memory[i]) {
 			free(server_memory[i]);
+		}
+		if(page_table[i]) {
+			free(page_table[i]->last_used);
 			free(page_table[i]);
 		}
 	}
