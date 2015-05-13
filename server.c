@@ -25,7 +25,6 @@ typedef struct page_table_entry {
 	char* filename;
 	int page_number;
 	struct timeval* last_used;
-	pthread_rwlock_t* page_lock;
 } pte_t;
 
 // GLOBAL VARIABLES... BEWARE.
@@ -154,11 +153,14 @@ int get_all_pages(char* filename, int* all_pages) {
 	
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
-		if(page_table[i]) {
-			if(strcmp(page_table[i]->filename, filename) == 0) {
-				*(all_pages + num_pages) = i;
-				num_pages++;
-			}
+		pthread_rwlock_rdlock(pte_locks+i);
+		//printf("read lock pte #%d\n", i);
+		if(page_table[i] && strcmp(page_table[i]->filename, filename) == 0) {
+			*(all_pages + num_pages) = i;
+			num_pages++;
+		} else {
+			//printf("unlock read pte #%d\n", i);
+			pthread_rwlock_unlock(pte_locks+i);
 		}
 	}
 	return num_pages;
@@ -167,16 +169,30 @@ int get_all_pages(char* filename, int* all_pages) {
 // function to find an empty slot in memory or the least recently used
 // also lock the page table entry chosen
 int find_slot() {
+	int found_slot = 0;
 	int result = 0;
 	int i;
-	for(i = 0; i < N_FRAMES; i++) {
-		if(!page_table[i]) {
-			return i;
-		}
-		if(page_table[i]->last_used->tv_sec < page_table[result]->last_used->tv_sec ||
-			(page_table[i]->last_used->tv_sec == page_table[result]->last_used->tv_sec
-			&& page_table[i]->last_used->tv_usec < page_table[result]->last_used->tv_usec)) {
-			result = i;
+	while(found_slot == 0) {
+		for(i = 0; i < N_FRAMES; i++) {
+			if(pthread_rwlock_trywrlock(pte_locks+i) == 0) {
+				//printf("write lock pte #%d\n", i);
+				found_slot = 1;
+				if(!page_table[i]) {
+					return i;
+				}
+				if(page_table[i]->last_used->tv_sec < page_table[result]->last_used->tv_sec ||
+					(page_table[i]->last_used->tv_sec == page_table[result]->last_used->tv_sec
+					&& page_table[i]->last_used->tv_usec < page_table[result]->last_used->tv_usec)) {
+					//printf("unlock write pte #%d\n", result);
+					pthread_rwlock_unlock(pte_locks+result);
+					result = i;
+				} else {
+					//printf("unlock write pte #%d\n", i);
+					pthread_rwlock_unlock(pte_locks+i);
+				}
+			} /* else {
+				printf("tried write lock pte #%d\n", i);
+			} */
 		}
 	}
 	return result;	
@@ -240,22 +256,18 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 		while(i < num_pages) {
 			if(page_table[all_pages[i]]->page_number == page) {
 				index = all_pages[i];
-				//printf("found page %d in memory at slot %d\n", page, index);
 			}
 			i++;
 		}
 
 		// not found
 		if(index < 0) {
-			//printf("page %d not found in memory... loading...\n", page);
 			// prepare table entry
 			pte_t* new_pte = (pte_t*)malloc(sizeof(pte_t));
 			new_pte->filename = (char*)malloc((strlen(filename)+1)*sizeof(char));
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
 			new_pte->last_used = NULL;
-			new_pte->page_lock = (pthread_rwlock_t*)malloc(sizeof(pthread_rwlock_t));
-			pthread_rwlock_init(new_pte->page_lock, NULL);
 
 			// get the bytes from the file
 			int fd = open(target, 'r');
@@ -264,21 +276,28 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			// find where to put this memory block
 			int replaced_page = -1;
 			if(num_pages < FRAMES_PER_FILE) {
-				//printf("Let's find a slot\n");
 				// this file still has room in the memory for more frames
 				index = find_slot();
 				*(all_pages + num_pages) = index;
 				num_pages++;
 			} else {
-				//printf("Max slots for this file, finding replace\n");
 				// need to replace one of the current file's frames
+				//printf("write lock pte #%d\n", all_pages[0]);
+				pthread_rwlock_wrlock(pte_locks+all_pages[0]);
 				index = all_pages[0];
 				for(i = 1; i < num_pages; i++) {
 					// compare seconds
+					//printf("write lock pte #%d\n", i);
+					pthread_rwlock_wrlock(pte_locks+i);
 					if(page_table[all_pages[i]]->last_used->tv_sec < page_table[index]->last_used->tv_sec ||
 						(page_table[all_pages[i]]->last_used->tv_sec == page_table[index]->last_used->tv_sec
 						&& page_table[all_pages[i]]->last_used->tv_usec < page_table[index]->last_used->tv_usec)) {
+						//printf("unlock write pte #%d\n", index);
+						pthread_rwlock_unlock(pte_locks+index);
 						index = all_pages[i];
+					} else {
+						//printf("unlock write pte #%d\n", i);
+						pthread_rwlock_unlock(pte_locks+i);
 					}
 				}
 				replaced_page = page_table[index]->page_number;
@@ -303,6 +322,11 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			server_memory[index] = (char*)malloc(FRAME_SIZE*sizeof(char));
 			read(fd, server_memory[index], FRAME_SIZE);
 			close(fd);
+
+			//printf("unlock write pte #%d\n", index);
+			pthread_rwlock_unlock(pte_locks+index);
+			//printf("read lock pte #%d\n", index);
+			pthread_rwlock_rdlock(pte_locks+index);
 		}
 
 		// determine file bytes to send over
@@ -353,6 +377,14 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			}		
 		}
 	}
+
+	// unlock the pages
+	int pte;
+	for(pte = 0; pte < num_pages; pte++) {
+		//printf("unlock pte #%d\n", all_pages[pte]);
+		pthread_rwlock_unlock(pte_locks+all_pages[pte]);
+	}
+
 	return 1;
 }
 
@@ -393,16 +425,17 @@ int delete_file(int sockfd, char* filename) {
 	// deallocate any frames and page table entries associated with this file
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
+		//printf("write lock pte #%d\n", i);
 		pthread_rwlock_wrlock(pte_locks+i);
 		if(page_table[i]) {
 		 	if(strcmp(page_table[i]->filename, filename) == 0) {	
-				pthread_rwlock_wrlock(page_table[i]->page_lock);
 				free(page_table[i]);
 				page_table[i] = NULL;			
 				// no need to unlock page because the lock no longer exists...
 				printf("[thread %u] Deallocated frame %d\n", pth, i);
 			}
 		}
+		//printf("unlock write pte #%d\n", i);
 		pthread_rwlock_unlock(pte_locks+i);
 	}
 
