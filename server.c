@@ -25,12 +25,13 @@ typedef struct page_table_entry {
 	char* filename;
 	int page_number;
 	struct timeval* last_used;
+	pthread_rwlock_t* page_lock;
 } pte_t;
 
 // GLOBAL VARIABLES... BEWARE.
 char* server_memory[N_FRAMES];
 pte_t* page_table[N_FRAMES];
-pthread_mutex_t page_table_lock;
+pthread_rwlock_t pte_locks[N_FRAMES];
 
 // function to handle DIR command
 // parameter: socket descriptor to write errors and results to
@@ -253,6 +254,8 @@ int read_file(int sockfd, char* filename, int byte_offset, int length) {
 			sprintf(new_pte->filename, "%s", filename);
 			new_pte->page_number = page;
 			new_pte->last_used = NULL;
+			new_pte->page_lock = (pthread_rwlock_t*)malloc(sizeof(pthread_rwlock_t));
+			pthread_rwlock_init(new_pte->page_lock, NULL);
 
 			// get the bytes from the file
 			int fd = open(target, 'r');
@@ -390,14 +393,17 @@ int delete_file(int sockfd, char* filename) {
 	// deallocate any frames and page table entries associated with this file
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
+		pthread_rwlock_wrlock(pte_locks+i);
 		if(page_table[i]) {
 		 	if(strcmp(page_table[i]->filename, filename) == 0) {	
+				pthread_rwlock_wrlock(page_table[i]->page_lock);
 				free(page_table[i]);
 				page_table[i] = NULL;			
 				// no need to unlock page because the lock no longer exists...
 				printf("[thread %u] Deallocated frame %d\n", pth, i);
 			}
 		}
+		pthread_rwlock_unlock(pte_locks+i);
 	}
 
 	// send acknowledgement
@@ -531,6 +537,7 @@ int main() {
 	int i;
 	for(i = 0; i < N_FRAMES; i++) {
 		page_table[i] = NULL;
+		pthread_rwlock_init(pte_locks+i, NULL);
 		server_memory[i] = NULL;
 	}
 
